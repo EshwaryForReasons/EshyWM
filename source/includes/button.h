@@ -3,7 +3,11 @@
 
 #include "util.h"
 
+#include <functional>
+#include <memory>
 #include <Imlib2.h>
+
+class EshyWMWindow;
 
 struct button_color_data
 {
@@ -12,43 +16,50 @@ struct button_color_data
     Color pressed;
 };
 
+enum EButtonState : uint8_t
+{
+    S_NONE,
+    S_Normal,
+    S_Hovered,
+    S_Pressed
+};
+
+struct button_clicked_data
+{
+    std::shared_ptr<EshyWMWindow> associated_window;
+    void (*callback_function)(std::shared_ptr<EshyWMWindow> window, void*);
+};
+
 class Button
 {
 public:
 
-    Button(const Drawable _drawable, const GC _drawable_graphics_context, const rect& _button_geometry, const button_color_data& _button_color = {0})
-        : drawable(_drawable)
-        , drawable_graphics_context(_drawable_graphics_context)
-        , button_geometry(_button_geometry)
-        , button_color(_button_color)
-        , b_hovered(false)
-    {}
-
-    virtual void draw();
+    virtual void draw() {};
     virtual void set_position(int x, int y);
     virtual void set_size(uint width, uint height);
-    virtual void set_hovered(bool b_new_hovered) {b_hovered = b_new_hovered;}
 
     const bool check_hovered(int cursor_x, int cursor_y) const;
-    const bool is_hovered() const {return b_hovered;}
-
+    void set_button_state(EButtonState new_button_state) {button_state = new_button_state; on_update_state();}
+    const EButtonState& get_button_state() const {return button_state;}
     const rect get_button_geometry() const {return button_geometry;}
+    button_clicked_data& get_data() {return data;}
+
+    virtual void on_update_state() {};
+
+    void click();
 
 protected:
 
     Button()
-        : drawable(0)
-        , drawable_graphics_context(nullptr)
-        , button_geometry({0, 0, 20, 20})
+        : button_geometry({0, 0, 20, 20})
         , button_color({0})
+        , data({nullptr, nullptr})
     {}
 
-    const Drawable drawable;
-    const GC drawable_graphics_context;
-
-    bool b_hovered;
+    EButtonState button_state;
     rect button_geometry;
     button_color_data button_color;
+    button_clicked_data data;
 };
 
 class WindowButton : public Button
@@ -61,8 +72,8 @@ public:
     virtual void draw() override {}
     virtual void set_position(int x, int y) override;
     virtual void set_size(uint width, uint height) override;
-    virtual void set_hovered(bool b_new_hovered) override;
     virtual void set_border_color(Color border_color);
+    virtual void on_update_state() override;
 
     const Window get_window() const {return button_window;}
 

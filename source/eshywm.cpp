@@ -12,10 +12,10 @@
 #include <filesystem>
 #include <sstream>
 
-std::shared_ptr<EshyWMTaskbar> EshyWM::Internal::taskbar;
-std::shared_ptr<EshyWMSwitcher> EshyWM::Internal::switcher;
-std::shared_ptr<EshyWMContextMenu> EshyWM::Internal::context_menu;
-std::shared_ptr<EshyWMRunMenu> EshyWM::Internal::run_menu;
+std::shared_ptr<EshyWMTaskbar> EshyWM::taskbar;
+std::shared_ptr<EshyWMSwitcher> EshyWM::switcher;
+std::shared_ptr<EshyWMContextMenu> EshyWM::context_menu;
+std::shared_ptr<EshyWMRunMenu> EshyWM::run_menu;
 
 enum var_type
 {
@@ -153,11 +153,11 @@ bool EshyWM::initialize()
     imlib_context_set_visual(DefaultVisual(DISPLAY, DefaultScreen(DISPLAY)));
     imlib_context_set_colormap(DefaultColormap(DISPLAY, DefaultScreen(DISPLAY)));
 
-    Internal::context_menu = std::make_shared<EshyWMContextMenu>(rect{0, 0, EshyWMConfig::context_menu_width, 150}, EshyWMConfig::context_menu_color);
-    Internal::switcher = std::make_shared<EshyWMSwitcher>(rect{CENTER_W(EshyWMConfig::switcher_button_width), CENTER_H((16/9) * EshyWMConfig::switcher_button_width), 50, 50}, EshyWMConfig::switcher_color);
-    Internal::run_menu = std::make_shared<EshyWMRunMenu>(rect{CENTER_W(EshyWMConfig::run_menu_width), CENTER_H(EshyWMConfig::run_menu_height), EshyWMConfig::run_menu_width, EshyWMConfig::run_menu_height}, EshyWMConfig::run_menu_color);
-    Internal::taskbar = std::make_shared<EshyWMTaskbar>(rect{0, DISPLAY_HEIGHT(0), DISPLAY_WIDTH(0), EshyWMConfig::taskbar_height}, EshyWMConfig::taskbar_color);
-    Internal::taskbar->show();
+    context_menu = std::make_shared<EshyWMContextMenu>(rect{0, 0, EshyWMConfig::context_menu_width, 150}, EshyWMConfig::context_menu_color);
+    switcher = std::make_shared<EshyWMSwitcher>(rect{CENTER_W(EshyWMConfig::switcher_button_width), CENTER_H((16/9) * EshyWMConfig::switcher_button_width), 50, 50}, EshyWMConfig::switcher_color);
+    run_menu = std::make_shared<EshyWMRunMenu>(rect{CENTER_W(EshyWMConfig::run_menu_width), CENTER_H(EshyWMConfig::run_menu_height), EshyWMConfig::run_menu_width, EshyWMConfig::run_menu_height}, EshyWMConfig::run_menu_color);
+    taskbar = std::make_shared<EshyWMTaskbar>(rect{0, (int)DISPLAY_HEIGHT(0), DISPLAY_WIDTH(0), EshyWMConfig::taskbar_height}, EshyWMConfig::taskbar_color);
+    taskbar->show();
 
     WindowManager::handle_preexisting_windows();
     for(;;)

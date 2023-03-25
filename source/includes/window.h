@@ -2,6 +2,13 @@
 
 #include "util.h"
 
+namespace WindowManager
+{
+void _minimize_window(std::shared_ptr<class EshyWMWindow> window, void* null = nullptr);
+void _maximize_window(std::shared_ptr<class EshyWMWindow> window, void* b_from_move_or_resize = (void*)false);
+void _close_window(std::shared_ptr<class EshyWMWindow> window, void* null = nullptr);
+};
+
 /**
  * Handles everything about an individual window
 */
@@ -19,24 +26,14 @@ public:
     void unframe_window();
     void setup_grab_events();
     void remove_grab_events();
-    void minimize_window();
-    void maximize_window(bool b_from_move_or_resize = false);
-    void close_window();
 
-    void move_window(Vector2D<int> delta) {move_window(delta.x, delta.y);}
-    void move_window_absolute(Vector2D<int> new_position) {move_window_absolute(new_position.x, new_position.y);}
-    void move_window(int delta_x, int delta_y);
-    void move_window_absolute(int new_position_x, int new_position_y);
-    void resize_window(Vector2D<int> delta) {resize_window(delta.x, delta.y);}
-    void resize_window_absolute(Vector2D<uint> new_size) {resize_window_absolute(new_size.x, new_size.y);}
-    void resize_window(int delta_x, int delta_y);
-    void resize_window_absolute(uint new_size_x, uint new_position_y);
-    void motion_modify_ended();
+    void move_window_absolute(int new_position_x, int new_position_y, bool b_from_maximize = false);
+    void resize_window_absolute(uint new_size_x, uint new_size_y, bool b_from_maximize = false);
+
     void recalculate_all_window_size_and_location();
     void set_size_according_to(uint new_width, uint new_height);
 
     /**@return 0 = none; 1 = minimize; 2 = maximize; 3 = close*/
-    int is_cursor_on_titlebar_buttons(Window window, int cursor_x, int cursor_y);
     void update_titlebar();
 
     /**Getters*/
@@ -47,8 +44,15 @@ public:
     rect get_titlebar_geometry() const {return titlebar_geometry;}
     rect get_window_geometry() const {return window_geometry;}
     bool is_minimized() const {return b_is_minimized;}
+    bool is_maximized() const {return b_is_maximized;}
+    std::shared_ptr<class WindowButton> get_minimize_button() const {return minimize_button;}
+    std::shared_ptr<class WindowButton> get_maximize_button() const {return maximize_button;}
 
-private:
+    void set_minimized(bool b_new_minimized) {b_is_minimized = b_new_minimized;}
+    void set_maximized(bool b_new_maximized) {b_is_maximized = b_new_maximized;}
+    std::shared_ptr<class WindowButton> get_close_button() const {return close_button;}
+
+public:
 
     Window window;
     Window frame;
@@ -58,15 +62,13 @@ private:
     rect titlebar_geometry;
     rect window_geometry;
     rect pre_minimize_and_maximize_saved_geometry;
-    rect temp_move_and_resize_geometry;
 
     bool b_is_maximized;
     bool b_is_minimized;
-    bool b_is_currently_moving_or_resizing;
 
     GC graphics_context_internal;
 
-    std::shared_ptr<class Button> minimize_button;
-    std::shared_ptr<class Button> maximize_button;
-    std::shared_ptr<class Button> close_button;
+    std::shared_ptr<class WindowButton> minimize_button;
+    std::shared_ptr<class WindowButton> maximize_button;
+    std::shared_ptr<class WindowButton> close_button;
 };

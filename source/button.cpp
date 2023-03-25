@@ -7,12 +7,6 @@
 #include <Imlib2.h>
 #include <X11/Xutil.h>
 
-void Button::draw()
-{
-    XSetForeground(DISPLAY, drawable_graphics_context, b_hovered ? button_color.normal : button_color.normal);
-    XFillRectangle(DISPLAY, drawable, drawable_graphics_context, button_geometry.x, button_geometry.y, button_geometry.width, button_geometry.height);
-}
-
 void Button::set_position(int x, int y)
 {
     button_geometry.x = x;
@@ -38,6 +32,14 @@ const bool Button::check_hovered(int cursor_x, int cursor_y) const
     return false;
 }
 
+void Button::click()
+{
+    if (data.callback_function)
+    {
+        data.callback_function(data.associated_window, (void*)false);
+    }
+}
+
 
 WindowButton::WindowButton(Window parent_window, const rect& _button_geometry, const button_color_data& _background_color)
 {
@@ -45,7 +47,7 @@ WindowButton::WindowButton(Window parent_window, const rect& _button_geometry, c
     button_color = _background_color;
 
     button_window = XCreateSimpleWindow(DISPLAY, parent_window, 0, 0, button_geometry.width, button_geometry.height, 0, 0, _background_color.normal);
-    XSelectInput(DISPLAY, button_window, StructureNotifyMask | VisibilityChangeMask | EnterWindowMask | LeaveWindowMask);
+    XSelectInput(DISPLAY, button_window, StructureNotifyMask | VisibilityChangeMask | EnterWindowMask | LeaveWindowMask | KeyPressMask | KeyReleaseMask);
     XMapWindow(DISPLAY, button_window);
     XSync(DISPLAY, false);
 }
@@ -77,15 +79,11 @@ void WindowButton::set_size(uint width, uint height)
     XResizeWindow(DISPLAY, button_window, width, height);
 }
 
-void WindowButton::set_hovered(bool b_new_hovered)
+void WindowButton::on_update_state()
 {
-    if(b_new_hovered != b_hovered)
-    {
-        Button::set_hovered(b_new_hovered);
-        XSetWindowBackground(DISPLAY, button_window, b_hovered ? button_color.hovered : button_color.normal);
-        XClearWindow(DISPLAY, button_window);
-        draw();
-    }
+    XSetWindowBackground(DISPLAY, button_window, (button_state == EButtonState::S_Hovered) ? button_color.hovered : (button_state == EButtonState::S_Pressed) ? button_color.pressed : button_color.normal);
+    XClearWindow(DISPLAY, button_window);
+    draw();
 }
 
 

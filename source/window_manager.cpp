@@ -19,51 +19,72 @@
 #define CHECK_KEYSYM_AND_MOD_PRESSED(event, mod, key_sym)       if(event.state & mod && event.keycode == XKeysymToKeycode(DISPLAY, key_sym))
 #define ELSE_CHECK_KEYSYM_AND_MOD_PRESSED(event, mod, key_sym)  else if(event.state & mod && event.keycode == XKeysymToKeycode(DISPLAY, key_sym))
 
-Display* WindowManager::Internal::display;
+Display* WindowManager::display;
+std::vector<std::shared_ptr<EshyWMWindow>> WindowManager::window_list;
+std::vector<s_monitor_info> WindowManager::monitor_info;
 
-Vector2D<int> WindowManager::Internal::click_cursor_position;
-std::shared_ptr<class container> WindowManager::Internal::root_container;
-
-bool WindowManager::Internal::b_tiling_mode;
-std::vector<s_monitor_info> WindowManager::Internal::monitor_info;
-
-organized_container_map_t WindowManager::Internal::frame_list;
-organized_container_map_t WindowManager::Internal::titlebar_list;
-std::vector<std::shared_ptr<Button>> WindowManager::Internal::button_list;
-
-double_click_data WindowManager::Internal::titlebar_double_click;
-
-static bool b_window_manager_detected;
-
-bool is_key_down(Display* display, char* target_string)
+static Vector2D<int> click_cursor_position;
+static struct double_click_data
 {
-    char keys_return[32] = {0};
-    KeySym target_sym = XStringToKeysym(target_string);
-    KeyCode target_code = XKeysymToKeycode(display, target_sym);
+    Window window;
+    Time first_click_time;
+    Time last_double_click_time;
+} titlebar_double_click;
+static std::shared_ptr<Button> currently_hovered_button;
+static rect manipulating_window_geometry;
 
-    int target_byte = target_code / 8;
-    int target_bit = target_code % 8;
-    int target_mask = 0x01 << target_bit;
+static void* b_window_manager_detected = malloc(sizeof(bool));
 
-    XQueryKeymap(display, keys_return);
-    return keys_return[target_byte] & target_mask;
-}
-
-void check_titlebar_button_pressed(Window window, int cursor_x, int cursor_y)
+std::shared_ptr<EshyWMWindow> window_list_contains_frame(Window frame)
 {
-    //This will check if the window is a frame (so we can't check the same area, but for a client window)
-    if(WindowManager::Internal::titlebar_list.count(window))
+    std::shared_ptr<EshyWMWindow> parent_window = nullptr;
+    for(std::shared_ptr<EshyWMWindow> window : WindowManager::window_list)
     {
-        const int button_pressed = WindowManager::Internal::titlebar_list.at(window)->get_window()->is_cursor_on_titlebar_buttons(window, cursor_x, cursor_y);
-
-        if(button_pressed == 1)
-        WindowManager::Internal::titlebar_list.at(window)->get_window()->minimize_window();
-        else if(button_pressed == 2)
-        WindowManager::Internal::titlebar_list.at(window)->get_window()->maximize_window();
-        else if(button_pressed == 3)
-        WindowManager::Internal::titlebar_list.at(window)->get_window()->close_window();
+        if(window->get_frame() == frame)
+        {
+            parent_window = window;
+            break;
+        }
     }
+    
+    return parent_window;
 }
+
+std::shared_ptr<EshyWMWindow> window_list_contains_titlebar(Window titlebar)
+{
+    std::shared_ptr<EshyWMWindow> parent_window = nullptr;
+    for(std::shared_ptr<EshyWMWindow> window : WindowManager::window_list)
+    {
+        if(window->get_titlebar() == titlebar)
+        {
+            parent_window = window;
+            break;
+        }
+    }
+
+    return parent_window;
+}
+
+std::shared_ptr<EshyWMWindow> window_list_contains_window(Window internal_window)
+{
+    std::shared_ptr<EshyWMWindow> parent_window = nullptr;
+    for(std::shared_ptr<EshyWMWindow> window : WindowManager::window_list)
+    {
+        if(window->get_window() == internal_window)
+        {
+            parent_window = window;
+            break;
+        }
+    }
+
+    return parent_window;
+}
+
+void remove_from_window_list(std::shared_ptr<EshyWMWindow> window)
+{
+    WindowManager::window_list.erase(find(WindowManager::window_list.begin(), WindowManager::window_list.end(), window));
+}
+
 
 void update_monitor_info()
 {
@@ -72,31 +93,24 @@ void update_monitor_info()
 
     for(int i = 0; i < n_monitors; i++)
     {
-        if(i < WindowManager::Internal::monitor_info.size())
-        WindowManager::Internal::monitor_info[i] = {(bool)monitors[i].primary, monitors[i].x, monitors[i].y, monitors[i].width, monitors[i].height};
-        else WindowManager::Internal::monitor_info.push_back({(bool)monitors[i].primary, monitors[i].x, monitors[i].y, monitors[i].width, monitors[i].height});
+        if(i < WindowManager::monitor_info.size())
+        {
+            WindowManager::monitor_info[i] = {(bool)monitors[i].primary, monitors[i].x, monitors[i].y, (uint)monitors[i].width, (uint)monitors[i].height};
+        }
+        else WindowManager::monitor_info.push_back({(bool)monitors[i].primary, monitors[i].x, monitors[i].y, (uint)monitors[i].width, (uint)monitors[i].height});
     }
 
     XRRFreeMonitors(monitors);
 }
 
-int OnWMDetected(Display* display, XErrorEvent* event)
+std::shared_ptr<EshyWMWindow> register_window(Window window, bool b_was_created_before_window_manager)
 {
-    ensure(static_cast<int>(event->error_code) == BadAccess)
-    b_window_manager_detected = true;
-    return 0;
-}
-
-int OnXError(Display* display, XErrorEvent* event)
-{
-    const int MAX_ERROR_TEXT_LEGTH = 1024;
-    char error_text[MAX_ERROR_TEXT_LEGTH];
-    XGetErrorText(display, event->error_code, error_text, sizeof(error_text));
-    return 0;
-}
-
-std::shared_ptr<class EshyWMWindow> register_window(Window window, bool b_was_created_before_window_manager)
-{
+    //Do not frame already framed windows
+    if(window_list_contains_window(window))
+    {
+        return nullptr;
+    }
+    
     //Retrieve attributes of window to frame
     XWindowAttributes x_window_attributes = {0};
     XGetWindowAttributes(DISPLAY, window, &x_window_attributes);
@@ -110,17 +124,17 @@ std::shared_ptr<class EshyWMWindow> register_window(Window window, bool b_was_cr
     //Add so we can restore if we crash
     XAddToSaveSet(DISPLAY, window);
 
-    //Do this before worrying about the icons
-    std::shared_ptr<container> leaf_container = std::make_shared<container>(EOrientation::O_Horizontal, EContainerType::CT_Leaf);
-    leaf_container->create_window(window, x_window_attributes);
-    WindowManager::Internal::root_container->add_internal_container(leaf_container);
+    //Create window
+    std::shared_ptr<EshyWMWindow> new_window = std::make_shared<EshyWMWindow>(window);
+    new_window->frame_window(x_window_attributes);
+    new_window->setup_grab_events();
+    WindowManager::window_list.push_back(new_window);
 
-    uint32_t* img_data = nullptr;
     Imlib_Image icon;
 
     //Try to retrieve icon from application
-    const Atom NET_WM_ICON = XInternAtom(DISPLAY, "_NET_WM_ICON", false);
-    const Atom CARDINAL = XInternAtom(DISPLAY, "CARDINAL", false);
+    static const Atom ATOM_NET_WM_ICON = XInternAtom(DISPLAY, "_NET_WM_ICON", false);
+    static const Atom ATOM_CARDINAL = XInternAtom(DISPLAY, "CARDINAL", false);
 
     Atom type_return;
     int format_return;
@@ -128,18 +142,18 @@ std::shared_ptr<class EshyWMWindow> register_window(Window window, bool b_was_cr
     unsigned long bytes_after_return;
     unsigned char* data_return = nullptr;
 
-    XGetWindowProperty(DISPLAY, window, NET_WM_ICON, 0, 1, false, CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
+    XGetWindowProperty(DISPLAY, window, ATOM_NET_WM_ICON, 0, 1, false, ATOM_CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
     if (data_return)
     {
         const int width = *(unsigned int*)data_return;
         XFree(data_return);
 
-        XGetWindowProperty(DISPLAY, window, NET_WM_ICON, 1, 1, false, CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
+        XGetWindowProperty(DISPLAY, window, ATOM_NET_WM_ICON, 1, 1, false, ATOM_CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
         const int height = *(unsigned int*)data_return;
         XFree(data_return);
 
-        XGetWindowProperty(DISPLAY, window, NET_WM_ICON, 2, width * height, false, CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
-        img_data = new uint32_t[width * height];
+        XGetWindowProperty(DISPLAY, window, ATOM_NET_WM_ICON, 2, width * height, false, ATOM_CARDINAL, &type_return, &format_return, &nitems_return, &bytes_after_return, &data_return);
+        uint32_t* img_data = new uint32_t[width * height];
         const ulong* ul = (ulong*)data_return;
 
         for(int i = 0; i < nitems_return; i++)
@@ -151,51 +165,101 @@ std::shared_ptr<class EshyWMWindow> register_window(Window window, bool b_was_cr
 
         icon = imlib_create_image_using_data(width, height, img_data);
     }
-    
-    //Load default icon if icon does not exist
-    if (!img_data)
+    else icon = imlib_load_image("../images/application_icon.png");
+
+    TASKBAR->add_button(new_window, icon);
+    SWITCHER->add_window_option(new_window, icon);
+    return new_window;
+}
+
+
+void handle_button_hovered(Window hovered_window, bool b_hovered, int mode)
+{
+    if (currently_hovered_button)
     {
-        icon = imlib_load_image("../images/application_icon.png");
+        //Going from hovered to normal
+        if (currently_hovered_button->get_button_state() == EButtonState::S_Hovered && !b_hovered && mode == NotifyNormal)
+        {
+            currently_hovered_button->set_button_state(EButtonState::S_Normal);
+            currently_hovered_button = nullptr;
+        }
+        //Going from hovered to pressed
+        else if (currently_hovered_button->get_button_state() == EButtonState::S_Hovered && !b_hovered && mode == NotifyGrab)
+            currently_hovered_button->set_button_state(EButtonState::S_Pressed);
+        //Going from pressed to hovered
+        else if (currently_hovered_button->get_button_state() == EButtonState::S_Pressed && b_hovered && mode == NotifyUngrab)
+            currently_hovered_button->set_button_state(EButtonState::S_Hovered);
     }
-    TASKBAR->add_button(leaf_container->get_window(), icon);
-    SWITCHER->add_window_option(leaf_container->get_window(), icon);
-    return leaf_container->get_window();
+
+    //Going from normal to hovered (need extra logic because our currently_hovered_button will change here)
+    if (((!currently_hovered_button) || (currently_hovered_button && currently_hovered_button->get_button_state() == EButtonState::S_Normal)) && b_hovered)
+    {
+        if(currently_hovered_button)
+            currently_hovered_button->set_button_state(EButtonState::S_Normal);
+
+        for(std::shared_ptr<WindowButton>& button : TASKBAR->get_taskbar_buttons())
+        {
+            if(button->get_window() == hovered_window)
+            {
+                currently_hovered_button = button;
+                break;
+            }
+        }
+
+        if(!currently_hovered_button)
+            for(std::shared_ptr<EshyWMWindow>& window : WindowManager::window_list)
+            {
+                if(window->get_minimize_button()->get_window() == hovered_window)
+                    currently_hovered_button = window->get_minimize_button();
+                else if(window->get_maximize_button()->get_window() == hovered_window)
+                    currently_hovered_button = window->get_maximize_button();
+                else if(window->get_close_button()->get_window() == hovered_window)
+                    currently_hovered_button = window->get_close_button();
+
+                if(currently_hovered_button)
+                    break;
+            }
+
+        if(currently_hovered_button)
+            currently_hovered_button->set_button_state(EButtonState::S_Hovered);
+    }
 }
 
 
 void OnDestroyNotify(const XDestroyWindowEvent& event)
 {
-    if(WindowManager::Internal::frame_list.count(event.window))
+    if(std::shared_ptr<EshyWMWindow> window = window_list_contains_frame(event.window))
     {
-        TASKBAR->remove_button(WindowManager::Internal::frame_list.at(event.window)->get_window());
-        SWITCHER->remove_window_option(WindowManager::Internal::frame_list.at(event.window)->get_window());
-        WindowManager::Internal::root_container->remove_internal_container(WindowManager::Internal::frame_list.at(event.window));
+        TASKBAR->remove_button(window);
+        SWITCHER->remove_window_option(window);
+        remove_from_window_list(window);
     }
 }
 
 void OnUnmapNotify(const XUnmapEvent& event)
 {
+    safe_ensure(event.event != ROOT);
+
     /**If we manage window then unframe. Need to check
      * because we will receive an UnmapNotify event for
      * a frame window we just destroyed. Ignore event
      * if it is triggered by reparenting a window that
      * was mapped before the window manager started*/
-    if(WindowManager::Internal::frame_list.count(event.window) && event.event != ROOT)
+    if(std::shared_ptr<EshyWMWindow> window = window_list_contains_frame(event.window))
     {
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->unframe_window();
+        window->unframe_window();
     }
-    // else
-    // {
-    //     for(auto const& [window, c] : WindowManager::Internal::frame_list)
-    //     {
-    //         const Window found_window = c->get_window()->get_window();
-    //         if(found_window == event.window)
-    //         {
-    //             WindowManager::Internal::frame_list.at(c->get_window()->get_frame())->get_window()->unframe_window();
-    //             break;
-    //         }
-    //     }
-    // }
+    else if(std::shared_ptr<EshyWMWindow> window = window_list_contains_window(event.window))
+    {
+        window->unframe_window();
+    }
+}
+
+void OnMapRequest(const XMapRequestEvent& event)
+{
+    register_window(event.window, false);
+    //Map window
+    XMapWindow(DISPLAY, event.window);
 }
 
 void OnConfigureNotify(const XConfigureEvent& event)
@@ -209,13 +273,6 @@ void OnConfigureNotify(const XConfigureEvent& event)
     }
 }
 
-void OnMapRequest(const XMapRequestEvent& event)
-{
-    register_window(event.window, false);
-    //Map window
-    XMapWindow(DISPLAY, event.window);
-}
-
 void OnConfigureRequest(const XConfigureRequestEvent& event)
 {
     XWindowChanges changes;
@@ -227,9 +284,9 @@ void OnConfigureRequest(const XConfigureRequestEvent& event)
     changes.sibling = event.above;
     changes.stack_mode = event.detail;
 
-    if(WindowManager::Internal::frame_list.count(event.window))
+    if(std::shared_ptr<EshyWMWindow> window = window_list_contains_frame(event.window))
     {
-        const Window frame = WindowManager::Internal::frame_list.at(event.window)->get_window()->get_frame();
+        const Window frame = window->get_frame();
         XConfigureWindow(DISPLAY, frame, event.value_mask, &changes);
     }
 
@@ -242,40 +299,32 @@ void OnVisibilityNotify(const XVisibilityEvent& event)
     if(TASKBAR)
     {
         if(event.window == TASKBAR->get_menu_window())
-        {
             TASKBAR->raise();
-        }
         else
         {
-            for(const window_button_pair& wbp : TASKBAR->get_taskbar_buttons())
+            for(const std::shared_ptr<WindowButton>& button : TASKBAR->get_taskbar_buttons())
             {
-                if(wbp.button && wbp.button->get_window() == event.window)
+                if(button && button->get_window() == event.window)
                 {
-                    wbp.button->draw();
+                    button->draw();
                 }
             }
         }
     }
 
     if(SWITCHER && event.window == SWITCHER->get_menu_window())
-    {
         SWITCHER->raise();
-    }
     else if(RUN_MENU && event.window == RUN_MENU->get_menu_window())
-    {
         RUN_MENU->raise();
-    }
-    else if(WindowManager::Internal::titlebar_list.count(event.window))
-    {
-        WindowManager::Internal::titlebar_list.at(event.window)->get_window()->update_titlebar();
-    }
+    else if(std::shared_ptr<EshyWMWindow> window = window_list_contains_titlebar(event.window))
+        window->update_titlebar();
 }
 
 void OnButtonPress(const XButtonEvent& event)
 {
     //Pass the click event through
     XAllowEvents(DISPLAY, ReplayPointer, event.time);
-
+    
     if(event.window != CONTEXT_MENU->get_menu_window())
     {
         CONTEXT_MENU->remove();
@@ -286,17 +335,13 @@ void OnButtonPress(const XButtonEvent& event)
         SWITCHER->button_clicked(event.x, event.y);
         return;
     }
-    else if(event.window == TASKBAR->get_menu_window())
-    {
-        TASKBAR->check_taskbar_button_clicked(event.x, event.y);
-        return;
-    }
     else if(event.window == ROOT)
     {
+        //Only make context menu if we click on the desktop, not within the bounds of any window
         bool b_make_context_menu = true;
-        for(auto const& [window, c] : WindowManager::Internal::frame_list)
+        for(const std::shared_ptr<EshyWMWindow>& window : WindowManager::window_list)
         {
-            const rect geo = c->get_window()->get_frame_geometry();
+            const rect geo = window->get_frame_geometry();
             if(event.x_root > geo.x && event.x_root < geo.x + geo.width && event.y_root > geo.y && event.y_root < geo.y + geo.height)
             {
                 b_make_context_menu = false;
@@ -313,29 +358,31 @@ void OnButtonPress(const XButtonEvent& event)
         return;
     }
 
-    if(WindowManager::Internal::frame_list.count(event.window))
+    if(std::shared_ptr<EshyWMWindow> fwindow = window_list_contains_frame(event.window))
     {
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->recalculate_all_window_size_and_location();
-        XSetInputFocus(DISPLAY, WindowManager::Internal::frame_list.at(event.window)->get_window()->get_window(), RevertToPointerRoot, event.time);
+        fwindow->recalculate_all_window_size_and_location();
+        XSetInputFocus(DISPLAY, fwindow->get_window(), RevertToPointerRoot, event.time);
+        manipulating_window_geometry = fwindow->get_frame_geometry();
     }
-    else if (WindowManager::Internal::titlebar_list.count(event.window))
+    else if (std::shared_ptr<EshyWMWindow> twindow = window_list_contains_titlebar(event.window))
     {
-        WindowManager::Internal::titlebar_list.at(event.window)->get_window()->recalculate_all_window_size_and_location();
-        check_titlebar_button_pressed(event.window, event.x, event.y);
-        XSetInputFocus(DISPLAY, WindowManager::Internal::titlebar_list.at(event.window)->get_window()->get_window(), RevertToPointerRoot, event.time);
+        twindow->recalculate_all_window_size_and_location();
+        XSetInputFocus(DISPLAY, twindow->get_window(), RevertToPointerRoot, event.time);
+        manipulating_window_geometry = twindow->get_frame_geometry();
 
-        if(event.time - WindowManager::Internal::titlebar_double_click.first_click_time < EshyWMConfig::double_click_time
-        && WindowManager::Internal::titlebar_double_click.window == event.window)
+        //Handle double click for maximize in the titlebar
+        if(titlebar_double_click.window == event.window
+        && event.time - titlebar_double_click.first_click_time < EshyWMConfig::double_click_time)
         {
-            WindowManager::Internal::titlebar_list.at(event.window)->get_window()->maximize_window();
-            WindowManager::Internal::titlebar_double_click = {event.window, 0, event.time};
+            WindowManager::_maximize_window(twindow);
+            titlebar_double_click = {event.window, 0, event.time};
         }
-        else WindowManager::Internal::titlebar_double_click = {event.window, event.time, 0};
+        else titlebar_double_click = {event.window, event.time, 0};
     }
     else return;
 
     //Save cursor position on click
-    WindowManager::Internal::click_cursor_position = Vector2D<int>(event.x_root, event.y_root);
+    click_cursor_position = {event.x_root, event.y_root};
     XRaiseWindow(DISPLAY, event.window);
 }
 
@@ -344,45 +391,30 @@ void OnButtonRelease(const XButtonEvent& event)
     //Pass the click event through
     XAllowEvents(DISPLAY, ReplayPointer, event.time);
 
-    if(event.state & Button1Mask || event.state & Button3Mask)
-    {
-        if(event.window == ROOT && event.state & Button3Mask)
-        {
-            CONTEXT_MENU->set_position(event.x, event.y);
-            CONTEXT_MENU->show();
-        }
-
-        if(WindowManager::Internal::frame_list.count(event.window))
-        {
-            WindowManager::Internal::frame_list.at(event.window)->get_window()->motion_modify_ended();
-        }
-        else if (WindowManager::Internal::titlebar_list.count(event.window))
-        {
-            WindowManager::Internal::titlebar_list.at(event.window)->get_window()->motion_modify_ended();
-        }
-    }
+    if(currently_hovered_button)
+        currently_hovered_button->click();
 }
 
 void OnMotionNotify(const XMotionEvent& event)
 {
-    const Vector2D<int> delta = Vector2D<int>(event.x_root, event.y_root) - WindowManager::Internal::click_cursor_position;
+    const Vector2D<int> delta = {event.x_root - click_cursor_position.x, event.y_root - click_cursor_position.y};
 
-    if(event.state & Mod4Mask && event.state & ShiftMask)
-    {
+    std::shared_ptr<EshyWMWindow> fwindow = window_list_contains_frame(event.window);
+    std::shared_ptr<EshyWMWindow> twindow = window_list_contains_titlebar(event.window);
+    if(fwindow && event.state & Mod4Mask && event.state & ShiftMask)
+    {        
         if(event.state & Button1Mask)
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->move_window(delta);
+            fwindow->move_window_absolute(manipulating_window_geometry.x + delta.x, manipulating_window_geometry.y + delta.y);
         else if(event.state & Button3Mask)
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->resize_window(delta);
+            fwindow->resize_window_absolute(std::max((int)manipulating_window_geometry.width + delta.x, 10), std::max((int)manipulating_window_geometry.height + delta.y, 10));
     }
-    else if(WindowManager::Internal::titlebar_list.count(event.window)
-    && event.time - WindowManager::Internal::titlebar_double_click.last_double_click_time > 10)
-    {
-        WindowManager::Internal::titlebar_list.at(event.window)->get_window()->move_window(delta);
-    }
+    else if(twindow && event.time - titlebar_double_click.last_double_click_time > 10)
+        twindow->move_window_absolute(manipulating_window_geometry.x + delta.x, manipulating_window_geometry.y + delta.y);
 }
 
 void OnKeyPress(const XKeyEvent& event)
 {
+    std::shared_ptr<EshyWMWindow> window = window_list_contains_frame(event.window);
     if(event.window == ROOT)
     {
         CHECK_KEYSYM_AND_MOD_PRESSED(event, Mod1Mask, XK_Tab)
@@ -393,14 +425,14 @@ void OnKeyPress(const XKeyEvent& event)
         ELSE_CHECK_KEYSYM_AND_MOD_PRESSED(event, Mod4Mask, XK_R)
         RUN_MENU->show();
     }
-    else if(event.state & Mod4Mask && WindowManager::Internal::frame_list.count(event.window))
+    else if(event.state & Mod4Mask && window)
     {
         CHECK_KEYSYM_PRESSED(event, XK_C)
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->close_window();
+        WindowManager::_close_window(window);
         ELSE_CHECK_KEYSYM_PRESSED(event, XK_f | XK_F)
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->maximize_window();
+        WindowManager::_maximize_window(window);
         ELSE_CHECK_KEYSYM_PRESSED(event, XK_a | XK_A)
-        WindowManager::Internal::frame_list.at(event.window)->get_window()->minimize_window();
+        WindowManager::_minimize_window(window);
     }
 
     XAllowEvents(DISPLAY, ReplayKeyboard, event.time);
@@ -415,121 +447,49 @@ void OnKeyRelease(const XKeyEvent& event)
     }
 }
 
-void OnEnterNotify(const XAnyEvent& event)
-{
-    for(std::shared_ptr<Button> button : WindowManager::Internal::button_list)
-    {
-        if(std::shared_ptr<WindowButton> window_button = std::dynamic_pointer_cast<WindowButton>(button))
-        {
-            if(window_button->get_window() == event.window)
-            {
-                window_button->set_hovered(true);
-                break;
-            }
-        }
-        else if(std::shared_ptr<ImageButton> image_button = std::dynamic_pointer_cast<ImageButton>(button))
-        {
-            if(image_button->get_window() == event.window)
-            {
-                image_button->set_hovered(true);
-                break;
-            }
-        }
-        else
-        {
-            Window root_return;
-            Window child_return;
-            int root_x_return;
-            int root_y_return;
-            int win_x_return;
-            int win_y_return;
-            uint mask_return;
-            XQueryPointer(DISPLAY, ROOT , &root_return, &child_return, &root_x_return, &root_y_return, &win_x_return, &win_y_return, &mask_return);
-
-            if(button->check_hovered(root_x_return, root_y_return))
-            {
-                window_button->set_hovered(true);
-                break;
-            }
-        }
-    }
-}
-
-void OnLeaveNotify(const XAnyEvent& event)
-{
-    for(std::shared_ptr<Button> button : WindowManager::Internal::button_list)
-    {
-        if(std::shared_ptr<WindowButton> window_button = std::dynamic_pointer_cast<WindowButton>(button))
-        {
-            if(window_button->get_window() == event.window)
-            {
-                window_button->set_hovered(false);
-                break;
-            }
-        }
-        else
-        {
-            Window root_return;
-            Window child_return;
-            int root_x_return;
-            int root_y_return;
-            int win_x_return;
-            int win_y_return;
-            uint mask_return;
-            XQueryPointer(DISPLAY, ROOT , &root_return, &child_return, &root_x_return, &root_y_return, &win_x_return, &win_y_return, &mask_return);
-
-            if(button->check_hovered(root_x_return, root_y_return))
-            {
-                window_button->set_hovered(false);
-                break;
-            }
-        }
-    }
-}
-
 namespace WindowManager
 {
 void initialize()
 {
-    Internal::display = XOpenDisplay(nullptr);
-    ensure(Internal::display)
+    display = XOpenDisplay(nullptr);
+    ensure(display)
 
-    update_monitor_info();
+    auto OnWMDetected = [](Display* display, XErrorEvent* event)
+    {
+        ensure(static_cast<int>(event->error_code) == BadAccess)
+        *(bool*)b_window_manager_detected = true;
+        return 0;
+    };
 
-    Internal::titlebar_double_click = {0, 0, 0};
-
-    b_window_manager_detected = false;
-    XSetErrorHandler(&OnWMDetected);
+    XSetErrorHandler(OnWMDetected);
     XSelectInput(DISPLAY, ROOT, SubstructureRedirectMask | StructureNotifyMask | SubstructureNotifyMask);
     XSync(DISPLAY, false);
-    ensure(!b_window_manager_detected)
+    ensure(!(*(bool*)(b_window_manager_detected)))
+    b_window_manager_detected = malloc(0);
 
-    Internal::root_container = std::make_shared<container>(EOrientation::O_Horizontal, EContainerType::CT_Root);
-    Internal::root_container->set_size(DISPLAY_WIDTH(0), DISPLAY_HEIGHT(0));
+    update_monitor_info();
+    titlebar_double_click = {0, 0, 0};
 }
 
 void main_loop()
 {
     XEvent event;
     XNextEvent(DISPLAY, &event);
+    LOG_EVENT_INFO(LS_Verbose, event)
     
-    //Make sure the lists are up to date
-    Internal::frame_list = Internal::root_container->get_all_container_map_by_frame();
-    Internal::titlebar_list = Internal::root_container->get_all_container_map_by_titlebar();
-
     switch (event.type)
     {
     case DestroyNotify:
         OnDestroyNotify(event.xdestroywindow);
+        break;
+    case MapRequest:
+        OnMapRequest(event.xmaprequest);
         break;
     case UnmapNotify:
         OnUnmapNotify(event.xunmap);
         break;
     case ConfigureNotify:
         OnConfigureNotify(event.xconfigure);
-        break;
-    case MapRequest:
-        OnMapRequest(event.xmaprequest);
         break;
     case ConfigureRequest:
         OnConfigureRequest(event.xconfigurerequest);
@@ -554,17 +514,25 @@ void main_loop()
         OnKeyRelease(event.xkey);
         break;
     case EnterNotify:
-        OnEnterNotify(event.xany);
+        handle_button_hovered(event.xcrossing.window, true, event.xcrossing.mode);
         break;
     case LeaveNotify:
-        OnLeaveNotify(event.xany);
+        handle_button_hovered(event.xcrossing.window, false, event.xcrossing.mode);
         break;
-    }
+    };
 }
 
 void handle_preexisting_windows()
 {
-    XSetErrorHandler(&OnXError);
+    auto OnXError = [](Display* display, XErrorEvent* event)
+    {
+        const int MAX_ERROR_TEXT_LEGTH = 1024;
+        char error_text[MAX_ERROR_TEXT_LEGTH];
+        XGetErrorText(display, event->error_code, error_text, sizeof(error_text));
+        return 0;
+    };
+
+    XSetErrorHandler(OnXError);
     XGrabServer(DISPLAY);
 
     Window returned_root;
@@ -585,19 +553,5 @@ void handle_preexisting_windows()
 
     XFree(top_level_windows);
     XUngrabServer(DISPLAY);
-}
-
-void add_button(std::shared_ptr<Button> button)
-{
-    Internal::button_list.push_back(button);
-}
-
-void remove_button(std::shared_ptr<Button> button)
-{
-    const std::vector<std::shared_ptr<Button>>::const_iterator it = std::find(Internal::button_list.cbegin(), Internal::button_list.cend(), button);
-    if(it != Internal::button_list.cend())
-    {
-        Internal::button_list.erase(it);
-    }
 }
 };

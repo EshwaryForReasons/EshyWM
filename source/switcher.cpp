@@ -133,7 +133,7 @@ void EshyWMSwitcher::handle_option_chosen(const int i)
     {
         if(switcher_window_options[i].window->is_minimized())
         {
-            switcher_window_options[i].window->minimize_window();
+            WindowManager::_minimize_window(switcher_window_options[i].window);
         }
 
         XRaiseWindow(DISPLAY, switcher_window_options[i].window->get_frame());
